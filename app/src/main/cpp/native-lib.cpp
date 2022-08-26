@@ -8,6 +8,7 @@
 #include "VideoChannel.h"
 #include "util.h"
 #include "safe_queue.h"
+#include "AudioChannel.h"
 
 //}
 
@@ -25,6 +26,7 @@ Java_com_chan_evcpusher_MainActivity_stringFromJNI(
 }
 
 VideoChannel *videoChannel = nullptr;
+AudioChannel *audioChannel = nullptr;
 bool isStart =0;
 pthread_t pid_start;
 bool readyPushing;
@@ -56,12 +58,13 @@ extern "C"
 JNIEXPORT void JNICALL
 Java_com_chan_evcpusher_EvcPush_native_1init(JNIEnv *env, jobject thiz) {
     videoChannel = new VideoChannel;
+    audioChannel = new AudioChannel();
 
     // 存入队列的 关联
     videoChannel->setVideoCallback(callback);
 
     // 存入队列的 关联
-//    audioChannel->setAudioCallback(callback);
+    audioChannel->setAudioCallback(callback);
 
     // 队列的释放工作 关联
     packets.setReleaseCallback(releasePackets);
@@ -119,6 +122,9 @@ void *task_start(void *args) {
 
         // 准备好了，可以开始向服务器推流了
         readyPushing = true;
+
+        //序列头
+        callback(audioChannel->getAudioSeqHeader());
 
         //我从队列里获取包，直接发给服务器
         packets.setWork(1);        // 队列开始工作
@@ -196,11 +202,17 @@ Java_com_chan_evcpusher_EvcPush_native_1start(JNIEnv *env, jobject thiz, jstring
 extern "C"
 JNIEXPORT void JNICALL
 Java_com_chan_evcpusher_EvcPush_native_1stop(JNIEnv *env, jobject thiz) {
+    isStart = false;0
+    readyPushing = false;
+    packets.setWork(0);
+    pthread_join(pid_start, nullptr);
 }
 
 extern "C"
 JNIEXPORT void JNICALL
 Java_com_chan_evcpusher_EvcPush_native_1release(JNIEnv *env, jobject thiz) {
+    DELETE(videoChannel);
+    DELETE(audioChannel);
 }
 
 
@@ -235,3 +247,43 @@ Java_com_chan_evcpusher_EvcPush_native_1initVideoEncoder(JNIEnv *env, jobject th
     }
 }
 
+
+/**
+ * 初始化编码器
+ */
+extern "C"
+JNIEXPORT void JNICALL
+Java_com_chan_evcpusher_EvcPush_native_1initAudioEncoder(JNIEnv *env, jobject thiz,
+                                                         jint sample_rate, jint num_channels) {
+    if (audioChannel) {
+        audioChannel->initAudioEncoder(sample_rate, num_channels);
+    }
+}
+
+/**
+ * 获取样本数
+ */
+extern "C"
+JNIEXPORT jint JNICALL
+Java_com_chan_evcpusher_EvcPush_native_1getInputSamples(JNIEnv *env, jobject thiz) {
+    if (audioChannel) {
+        return audioChannel->getInputSamples();
+    }
+    return 0;
+}
+
+
+/**
+ * 使用faac编码器，编码，封包，入队
+ */
+extern "C"
+JNIEXPORT void JNICALL
+Java_com_chan_evcpusher_EvcPush_native_1pushAudio(JNIEnv *env, jobject thiz, jbyteArray data_) {
+    if (!audioChannel || !readyPushing) {
+        return;
+    }
+    jbyte *data = env->GetByteArrayElements(data_, nullptr); // 此data数据就是AudioRecord采集到的原始数据
+    audioChannel->encodeData(data); // 核心函数：对音频数据 【进行faac的编码工作】
+    env->ReleaseByteArrayElements(data_, data, 0); // 释放byte[]
+
+}
